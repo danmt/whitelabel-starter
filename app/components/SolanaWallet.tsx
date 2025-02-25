@@ -1,84 +1,88 @@
-import React, { useState } from 'react';
-import { usePrivy, ConnectedSolanaWallet } from '@privy-io/react-auth';
-import { PublicKey, Transaction, Connection } from '@solana/web3.js';
-import { createTransferInstruction, TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
-import { toast } from 'react-toastify';
-import bs58 from 'bs58'
+import {ConnectedSolanaWallet, usePrivy, User} from '@privy-io/react-auth';
+import {PublicKey, Transaction} from '@solana/web3.js';
+import bs58 from 'bs58';
+import React, {useState} from 'react';
+import {toast} from 'react-toastify';
 
 interface SolanaWalletProps {
   wallet: ConnectedSolanaWallet;
   index: number;
+  user: User;
 }
 
-const SolanaWallet: React.FC<SolanaWalletProps> = ({ wallet, index }) => {
+async function requestRewardClaim(rewardKind: string, walletAddress: string) {
+  // Send to backend
+  const response = await fetch('http://localhost:5000/api/request-reward-claim', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      rewardKind,
+      userWalletAddress: walletAddress,
+    }),
+  });
+
+  const result = await response.json();
+
+  return result as {rewardId: string; serializedTransaction: string};
+}
+
+async function claimReward(
+  signature: string,
+  rewardId: string,
+  userId: string,
+  walletAddress: string,
+  serializedTransaction: string,
+) {
+  // Send to backend
+  const response = await fetch('http://localhost:5000/api/claim-reward', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      signature,
+      rewardId,
+      userId,
+      userPublicKey: walletAddress,
+      serializedTransaction,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || 'Failed to claim reward');
+  }
+
+  return result as {identifier: string; code: string; signature: string};
+}
+
+const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
   const [showSignMessage, setShowSignMessage] = useState(false);
   const [showSendTransaction, setShowSendTransaction] = useState(false);
-  const { signMessage } = usePrivy();
+  const {signMessage} = usePrivy();
 
-  const tokensSent = 100;
+  const rewardKind = '20% off';
+  const platformWalletPublicKey = new PublicKey('2BrPimYeYc26ghuGtPDWhGy7BAHDQeviSvQWsRRCUL7q');
 
   const customSolanaSendTransaction = async () => {
     try {
-      // Configure connection to Devnet (or Mainnet if configured in backend)
-      const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-
-      // Fetch recent blockhash
-      const { blockhash } = await connection.getLatestBlockhash();
-
-      // Platform vault public key (from your backend config)
-      const platformWalletPublicKey = new PublicKey('2BrPimYeYc26ghuGtPDWhGy7BAHDQeviSvQWsRRCUL7q');
-      const mintPublicKey = new PublicKey('CTMApYyrzN8PnchQ48XUzxi1ESuSpHjd1p5ZVA8mpvVk');
-      const mintDecimals = 9; // Adjust based on your token's decimals
-      const userPublicKey = new PublicKey(wallet.address);
-
-      // Get associated token accounts
-      const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, userPublicKey);
-      const platformTokenAccount = await getAssociatedTokenAddress(mintPublicKey, platformWalletPublicKey);
-
-      // Example reward claim: 100 tokens
-      const tokensInSmallestUnit = Math.floor(tokensSent * Math.pow(10, mintDecimals));
-
-      // Build transaction
-      const transaction = new Transaction({
-        recentBlockhash: blockhash,
-        feePayer: platformWalletPublicKey,
-      }).add(
-        createTransferInstruction(
-          userTokenAccount, // Source: user's token account
-          platformTokenAccount, // Destination: platform's vault
-          userPublicKey, // Owner: user's wallet
-          tokensInSmallestUnit, // Amount in smallest unit
-          [], // No multi-signers
-          TOKEN_PROGRAM_ID
-        )
-      );
+      const rewardClaim = await requestRewardClaim(rewardKind, wallet.address);
+      const transaction = Transaction.from(bs58.decode(rewardClaim.serializedTransaction));
 
       // Sign the transaction with the user's wallet
       const signedTx = await wallet.signTransaction!(transaction);
-      const serializedTx = bs58.encode(signedTx.serialize({ requireAllSignatures: false }));
-      const signature = signedTx.signatures[1].signature?.toString('base64');
+      const serializedTx = bs58.encode(signedTx.serialize({requireAllSignatures: false}));
+      const signature = signedTx.signatures[1].signature!.toString('base64');
 
       // Send to backend
-      const response = await fetch('http://localhost:5000/api/claim-reward', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          signature,
-          rewardKind: '2x1', // Example reward kind
-          userId: 'user123', // Example user ID
-          userPublicKey: wallet.address,
-          tokensSent,
-          serializedTransaction: serializedTx,
-        }),
-      });
+      const reward = await claimReward(
+        signature,
+        rewardClaim.rewardId,
+        user.id,
+        wallet.address,
+        serializedTx,
+      );
 
-      const result = await response.json();
-
-      if (response.ok) {
-        toast.success(`Reward claimed successfully! Tx: ${result.signature}`);
-      } else {
-        throw new Error(result.error || 'Failed to claim reward');
-      }
+      toast.success(`Reward claimed successfully! Tx: ${reward.signature}`);
     } catch (error: any) {
       toast.error(`Failed to send transaction: ${error?.message}`);
     }
@@ -86,7 +90,7 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({ wallet, index }) => {
 
   const customSignMessage = async () => {
     try {
-      const signature = await signMessage({ message: 'Your message here' });
+      const signature = await signMessage({message: 'Your message here'});
       toast.success(`Message signed successfully! ${signature}`);
     } catch (error: any) {
       toast.error(`Failed to sign message: ${error?.message}`);
@@ -146,9 +150,8 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({ wallet, index }) => {
           </p>
           <p className="text-xs text-gray-600 mb-2">
             To Vault: <br />
-            <span className="break-all">2BrPimYeYc26ghuGtPDWhGy7BAHDQeviSvQWsRRCUL7q</span>
+            <span className="break-all">{platformWalletPublicKey.toString()}</span>
           </p>
-          <p className="text-xs text-gray-600 mb-2">Tokens: {tokensSent}</p>
           <div className="flex flex-col space-y-3">
             <button
               onClick={() => customSolanaSendTransaction()}
