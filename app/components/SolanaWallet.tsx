@@ -1,42 +1,84 @@
-import React, {useState} from 'react';
-import {usePrivy, ConnectedSolanaWallet} from '@privy-io/react-auth';
-import {PublicKey, Transaction, Connection, SystemProgram} from '@solana/web3.js';
-import {toast} from 'react-toastify';
+import React, { useState } from 'react';
+import { usePrivy, ConnectedSolanaWallet } from '@privy-io/react-auth';
+import { PublicKey, Transaction, Connection } from '@solana/web3.js';
+import { createTransferInstruction, TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
+import { toast } from 'react-toastify';
+import bs58 from 'bs58'
 
 interface SolanaWalletProps {
   wallet: ConnectedSolanaWallet;
   index: number;
 }
 
-const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index}) => {
+const SolanaWallet: React.FC<SolanaWalletProps> = ({ wallet, index }) => {
   const [showSignMessage, setShowSignMessage] = useState(false);
   const [showSendTransaction, setShowSendTransaction] = useState(false);
-  const {signMessage} = usePrivy();
+  const { signMessage } = usePrivy();
+
+  const tokensSent = 100;
 
   const customSolanaSendTransaction = async () => {
     try {
-      // Configure your connection to point to the correct Solana network
-      let connection = new Connection('https://api.devnet.solana.com');
+      // Configure connection to Devnet (or Mainnet if configured in backend)
+      const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 
-      // Fetch the recent blockhash
-      let {blockhash} = await connection.getLatestBlockhash();
+      // Fetch recent blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
 
-      // Build out the transaction object for your desired program
-      // https://solana-labs.github.io/solana-web3.js/classes/Transaction.html
-      let transaction = new Transaction({
+      // Platform vault public key (from your backend config)
+      const platformWalletPublicKey = new PublicKey('2BrPimYeYc26ghuGtPDWhGy7BAHDQeviSvQWsRRCUL7q');
+      const mintPublicKey = new PublicKey('CTMApYyrzN8PnchQ48XUzxi1ESuSpHjd1p5ZVA8mpvVk');
+      const mintDecimals = 9; // Adjust based on your token's decimals
+      const userPublicKey = new PublicKey(wallet.address);
+
+      // Get associated token accounts
+      const userTokenAccount = await getAssociatedTokenAddress(mintPublicKey, userPublicKey);
+      const platformTokenAccount = await getAssociatedTokenAddress(mintPublicKey, platformWalletPublicKey);
+
+      // Example reward claim: 100 tokens
+      const tokensInSmallestUnit = Math.floor(tokensSent * Math.pow(10, mintDecimals));
+
+      // Build transaction
+      const transaction = new Transaction({
         recentBlockhash: blockhash,
-        feePayer: new PublicKey(wallet.address),
+        feePayer: platformWalletPublicKey,
       }).add(
-        SystemProgram.transfer({
-          fromPubkey: new PublicKey(wallet.address),
-          toPubkey: new PublicKey('4tFqt2qzaNsnZqcpjPiyqYw9LdRzxaZdX2ewPncYEWLA'),
-          lamports: 1000000000, // 1 SOL = 1,000,000,000 lamports
-        }),
+        createTransferInstruction(
+          userTokenAccount, // Source: user's token account
+          platformTokenAccount, // Destination: platform's vault
+          userPublicKey, // Owner: user's wallet
+          tokensInSmallestUnit, // Amount in smallest unit
+          [], // No multi-signers
+          TOKEN_PROGRAM_ID
+        )
       );
 
-      // Send transaction
-      const txHash = await wallet.sendTransaction!(transaction, connection);
-      toast.success(`Transaction sent successfully! ${txHash}`);
+      // Sign the transaction with the user's wallet
+      const signedTx = await wallet.signTransaction!(transaction);
+      const serializedTx = bs58.encode(signedTx.serialize({ requireAllSignatures: false }));
+      const signature = signedTx.signatures[1].signature?.toString('base64');
+
+      // Send to backend
+      const response = await fetch('http://localhost:5000/api/claim-reward', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          signature,
+          rewardKind: '2x1', // Example reward kind
+          userId: 'user123', // Example user ID
+          userPublicKey: wallet.address,
+          tokensSent,
+          serializedTransaction: serializedTx,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast.success(`Reward claimed successfully! Tx: ${result.signature}`);
+      } else {
+        throw new Error(result.error || 'Failed to claim reward');
+      }
     } catch (error: any) {
       toast.error(`Failed to send transaction: ${error?.message}`);
     }
@@ -97,22 +139,22 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index}) => {
       )}
       {showSendTransaction && (
         <div className="mt-4 p-2 border rounded shadow bg-white text-left">
-          <h2 className="text-lg font-semibold mb-2">Custom transaction</h2>
+          <h2 className="text-lg font-semibold mb-2">Claim Reward</h2>
           <p className="text-xs text-gray-600 mb-2">
             From: <br />
             <span className="break-all">{wallet.address}</span>
           </p>
           <p className="text-xs text-gray-600 mb-2">
-            To: <br />
-            <span className="break-all">4tFqt2qzaNsnZqcpjPiyqYw9LdRzxaZdX2ewPncYEWLA</span>
+            To Vault: <br />
+            <span className="break-all">2BrPimYeYc26ghuGtPDWhGy7BAHDQeviSvQWsRRCUL7q</span>
           </p>
-          <p className="text-xs text-gray-600 mb-2">Value: 10000</p>
+          <p className="text-xs text-gray-600 mb-2">Tokens: {tokensSent}</p>
           <div className="flex flex-col space-y-3">
             <button
               onClick={() => customSolanaSendTransaction()}
               className="wallet-button wallet-button-primary"
             >
-              <div className="btn-text">Send</div>
+              <div className="btn-text">Claim</div>
             </button>
             <button
               onClick={() => setShowSendTransaction(false)}
