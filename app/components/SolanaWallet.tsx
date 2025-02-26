@@ -1,4 +1,4 @@
-import {ConnectedSolanaWallet, usePrivy, User} from '@privy-io/react-auth';
+import {ConnectedSolanaWallet, User} from '@privy-io/react-auth';
 import {Account, getAccount, getAssociatedTokenAddress} from '@solana/spl-token';
 import {Connection, PublicKey, Transaction} from '@solana/web3.js';
 import bs58 from 'bs58';
@@ -19,17 +19,17 @@ interface RewardKind {
 const REWARD_KINDS: RewardKind[] = [
   {kind: '20% off', tokens: 50},
   {kind: 'Free Shipping', tokens: 75},
-  {kind: 'Gift Card', tokens: 25},
+  {kind: '2x1', tokens: 100},
 ];
 
-async function requestRewardClaim(rewardKind: string, walletAddress: string, tokensSent: number) {
+async function requestRewardClaim(rewardKind: string, userId: string, userWalletAddress: string) {
   const response = await fetch('http://localhost:5000/api/request-reward-claim', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       rewardKind,
-      userWalletAddress: walletAddress,
-      tokensSent,
+      userId,
+      userWalletAddress,
     }),
   });
 
@@ -38,28 +38,19 @@ async function requestRewardClaim(rewardKind: string, walletAddress: string, tok
   return result as {rewardId: string; serializedTransaction: string};
 }
 
-async function claimReward(
-  signature: string,
-  rewardId: string,
-  userId: string,
-  walletAddress: string,
-  serializedTransaction: string,
-) {
+async function claimReward(signature: string, rewardId: string) {
   const response = await fetch('http://localhost:5000/api/claim-reward', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       signature,
       rewardId,
-      userId,
-      userPublicKey: walletAddress,
-      serializedTransaction,
     }),
   });
 
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Failed to claim reward');
-  return result as {code: string; signature: string};
+  return result as {identifier: string; code: string; signature: string};
 }
 
 const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
@@ -90,25 +81,17 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
     fetchBalance();
   }, [wallet.address]);
 
-  const handleClaimReward = async (rewardKind: string, tokensSent: number) => {
+  const handleClaimReward = async (rewardKind: string) => {
     setIsClaiming(true); // Start claiming state
     const toastId = toast.loading(`Claiming ${rewardKind} reward...`); // Eager toast with loading
 
     try {
-      const rewardClaim = await requestRewardClaim(rewardKind, wallet.address, tokensSent);
+      const rewardClaim = await requestRewardClaim(rewardKind, user.id, wallet.address);
       const transaction = Transaction.from(bs58.decode(rewardClaim.serializedTransaction));
-
-      const signedTx = await wallet.signTransaction!(transaction);
-      const serializedTx = bs58.encode(signedTx.serialize({requireAllSignatures: false}));
-      const signature = signedTx.signatures[1].signature!.toString('base64');
-
-      const reward = await claimReward(
-        signature,
-        rewardClaim.rewardId,
-        user.id,
-        wallet.address,
-        serializedTx,
-      );
+      const signedTransaction = await wallet.signTransaction!(transaction);
+      const signature = signedTransaction.signatures[1].signature!.toString('base64');
+      
+      const reward = await claimReward(signature, rewardClaim.rewardId);
 
       setClaimedCouponCode(reward.code);
       toast.update(toastId, {
@@ -161,7 +144,7 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
             <button
               onClick={() => {
                 const reward = REWARD_KINDS.find((r) => r.kind === selectedRewardKind);
-                if (reward) handleClaimReward(reward.kind, reward.tokens);
+                if (reward) handleClaimReward(reward.kind);
               }}
               className={`wallet-button wallet-button-primary flex items-center gap-2 ${isClaiming ? 'opacity-50 cursor-not-allowed' : ''}`}
               disabled={isClaiming}
