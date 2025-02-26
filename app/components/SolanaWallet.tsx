@@ -16,6 +16,10 @@ interface RewardKind {
   tokens: number;
 }
 
+const API_URL = 'http://localhost:5000';
+const RPC_URL = 'https://devnet.helius-rpc.com/?api-key=127d0f9b-34b2-4120-9bad-5a429d1f10f6';
+const MINT_ADDRESS = 'CTMApYyrzN8PnchQ48XUzxi1ESuSpHjd1p5ZVA8mpvVk';
+const MINT_DECIMALS = 9;
 const REWARD_KINDS: RewardKind[] = [
   {kind: '20% off', tokens: 50},
   {kind: 'Free Shipping', tokens: 75},
@@ -23,7 +27,7 @@ const REWARD_KINDS: RewardKind[] = [
 ];
 
 async function requestRewardClaim(rewardKind: string, userId: string, userWalletAddress: string) {
-  const response = await fetch('http://localhost:5000/api/request-reward-claim', {
+  const response = await fetch(`${API_URL}/api/request-reward-claim`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -39,7 +43,7 @@ async function requestRewardClaim(rewardKind: string, userId: string, userWallet
 }
 
 async function claimReward(signature: string, rewardId: string) {
-  const response = await fetch('http://localhost:5000/api/claim-reward', {
+  const response = await fetch(`${API_URL}/api/claim-reward`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -58,20 +62,17 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
   const [selectedRewardKind, setSelectedRewardKind] = useState<string | null>(null);
   const [claimedCouponCode, setClaimedCouponCode] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState(false); // Track claiming state
-  const mintDecimals = 9;
 
   useEffect(() => {
     const fetchBalance = async () => {
       try {
-        const connection = new Connection(
-          'https://devnet.helius-rpc.com/?api-key=127d0f9b-34b2-4120-9bad-5a429d1f10f6',
-          'confirmed',
-        );
-        const mintPublicKey = new PublicKey('CTMApYyrzN8PnchQ48XUzxi1ESuSpHjd1p5ZVA8mpvVk');
+        const connection = new Connection(RPC_URL, 'confirmed');
+        const mintPublicKey = new PublicKey(MINT_ADDRESS);
         const userPublicKey = new PublicKey(wallet.address);
         const tokenAccount = await getAssociatedTokenAddress(mintPublicKey, userPublicKey);
         const accountInfo: Account = await getAccount(connection, tokenAccount);
-        const balanceInTokens = Number(accountInfo.amount) / Math.pow(10, mintDecimals);
+        const balanceInTokens = Number(accountInfo.amount) / Math.pow(10, MINT_DECIMALS);
+        
         setBalance(balanceInTokens);
       } catch (error: any) {
         toast.error(`Failed to fetch balance: ${error?.message}`);
@@ -90,7 +91,6 @@ const SolanaWallet: React.FC<SolanaWalletProps> = ({wallet, index, user}) => {
       const transaction = Transaction.from(bs58.decode(rewardClaim.serializedTransaction));
       const signedTransaction = await wallet.signTransaction!(transaction);
       const signature = signedTransaction.signatures[1].signature!.toString('base64');
-      
       const reward = await claimReward(signature, rewardClaim.rewardId);
 
       setClaimedCouponCode(reward.code);
