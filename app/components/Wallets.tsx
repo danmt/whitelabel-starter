@@ -70,7 +70,7 @@ export default function Wallets() {
       <div className="mt-4">
         {solanaWallets.length > 0 && user && (
           <div className="mb-4">
-            <div className="flex gap-2 flex-wrap">
+            <div className="flex gap-2 flex-wrap justify-center">
               {solanaWallets.map((wallet, index) => (
                 <div key={wallet.address}>
                   <SolanaWallet wallet={wallet} index={index} user={user} />
